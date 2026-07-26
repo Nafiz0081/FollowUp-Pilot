@@ -4,6 +4,7 @@ import operator
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
 
+from langgraph.types import Command, interrupt
 from models import MeetingAnalysis, DraftEmail
 
 
@@ -78,5 +79,21 @@ async def draft_email(state: AgentState) -> Dict:
         'edited_body': None,
 
     }
+
+async def human_review(state: AgentState) -> Command
+
+    payload = interrupt({
+        'waiting_for': 'human_review',
+        'draft': state['current_draft'],
+        'attendee_name': state['attendees'][state['current_attendee_index']],
+    })
+
+    decision = payload.get('decision','reject')
+    edited_body = payload.get('edited_body')
+
+    return Command(update={
+        'review_decision': decision,
+        'edited_body': edited_body,
+    })
 
 
