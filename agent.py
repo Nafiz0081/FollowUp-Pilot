@@ -1,13 +1,25 @@
+import sys
+from pathlib import Path
 from typing import Annotated , TypedDict , List , Optional , Dict , Any
 import operator
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from langgraph.types import Command, interrupt
 from models import MeetingAnalysis, DraftEmail
 
+# Path to the MCP server script
+MCP_SERVER_PATH = Path(__file__).parent / "mcp_server" / "tools_server.py"
 
+MCP_CONFIG = {
+    "followup_tools": {
+        "command": sys.executable,   # uses the same Python that's running the agent
+        "args":    [str(MCP_SERVER_PATH)],
+        "transport": "stdio",
+    }
+}
 class AgentState(TypedDict):
 
     meeting_notes: str
@@ -95,5 +107,57 @@ async def human_review(state: AgentState) -> Command
         'review_decision': decision,
         'edited_body': edited_body,
     })
+
+
+async def execute_action(state: AgentState) -> Dict:
+    idx      = state['current_attendee_index']
+    attendee = state['attendees'][idx]
+    draft    = state['current_draft']
+
+    if state['review_decision'] == 'reject':
+        return {'skipped_attendees': [attendee]}
+
+    email_body = state.get('edited_body') or draft['body']
+
+    my_tasks = [
+        item for item in state['action_items']
+        if item['owner'].lower() == attendee.lower()
+    ]
+
+    sent  = []
+    saved = []
+
+    async with MultiServerMCPClient(MCP_CONFIG) as client:
+        tools = {t.name: t for t in client.get_tools()}
+
+        # ── Send the email ─────────────────────────────────────────
+        send_result = await tools['send_email'].ainvoke({
+            'recipient': draft['recipient_email'],
+            'subject':   draft['subject'],
+            'body':      email_body,
+        })
+
+        sent.append({
+            'recipient': attendee,
+            'email':     draft['recipient_email'],
+            'subject':   draft['subject'],
+            'result':    send_result,
+        })
+
+        # ── Save each action item for this attendee ────────────────
+        for task in my_tasks:
+            save_result = await tools['save_action_item'].ainvoke({
+                'owner':           task['owner'],
+                'task':            task['task'],
+                'due_date':        task['due_date'],
+                'meeting_summary': state['meeting_summary'],
+            })
+            saved.append(save_result)
+
+    return {
+        'sent_emails': sent,
+        'saved_tasks': saved,
+    }
+
 
 
